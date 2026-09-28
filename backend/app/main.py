@@ -1,10 +1,11 @@
 from contextlib import asynccontextmanager, closing
 from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from pydantic import BaseModel, StringConstraints
 
 from app.database import connect, initialize_database
@@ -59,6 +60,20 @@ def create_app(database_path: Path = DEFAULT_DATABASE_PATH) -> FastAPI:
                     ),
                 )
         return project
+
+    @app.get("/api/projects", response_model=list[Project])
+    def list_projects(
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+        offset: Annotated[int, Query(ge=0, le=9223372036854775807)] = 0,
+    ) -> list[Project]:
+        with closing(connect(database_path)) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                "SELECT id, name, description, created_at FROM projects "
+                "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        return [Project(**dict(row)) for row in rows]
 
     return app
 
