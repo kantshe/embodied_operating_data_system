@@ -106,3 +106,29 @@ def test_list_projects_default_limit(tmp_path):
 def test_list_projects_rejects_invalid_pagination(tmp_path, query):
     with TestClient(create_app(tmp_path / "test.db")) as client:
         assert client.get(f"/api/projects?{query}").status_code == 422
+
+
+@pytest.mark.parametrize("description", [None, "Tabletop experiment"])
+def test_get_project_returns_saved_fields(tmp_path, description):
+    database_path = tmp_path / "test.db"
+    with TestClient(create_app(database_path)) as client:
+        created = client.post(
+            "/api/projects", json={"name": "Pick", "description": description}
+        )
+        assert created.status_code == 201
+        project = created.json()
+        assert client.post("/api/projects", json={"name": "Other"}).status_code == 201
+
+    with TestClient(create_app(database_path)) as client:
+        response = client.get(f"/api/projects/{project['id']}")
+    assert response.status_code == 200
+    assert response.json() == project
+
+
+@pytest.mark.parametrize("project_id", ["missing", "' OR 1=1 --"])
+def test_get_project_not_found(tmp_path, project_id):
+    with TestClient(create_app(tmp_path / "test.db")) as client:
+        assert client.post("/api/projects", json={"name": "Pick"}).status_code == 201
+        response = client.get(f"/api/projects/{project_id}")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Project not found"}

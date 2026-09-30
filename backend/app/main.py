@@ -5,7 +5,7 @@ import sqlite3
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, StringConstraints
 
 from app.database import connect, initialize_database
@@ -20,6 +20,18 @@ class ProjectCreate(BaseModel):
 
 class Project(ProjectCreate):
     id: str
+    created_at: datetime
+
+
+class TaskCreate(BaseModel):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    objective: str | None = None
+    scene: str | None = None
+
+
+class Task(TaskCreate):
+    id: str
+    project_id: str
     created_at: datetime
 
 
@@ -74,6 +86,56 @@ def create_app(database_path: Path = DEFAULT_DATABASE_PATH) -> FastAPI:
                 (limit, offset),
             ).fetchall()
         return [Project(**dict(row)) for row in rows]
+
+    @app.get(
+        "/api/projects/{project_id}",
+        response_model=Project,
+        responses={404: {"description": "Project not found"}},
+    )
+    def get_project(project_id: str) -> Project:
+        with closing(connect(database_path)) as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                "SELECT id, name, description, created_at FROM projects WHERE id = ?",
+                (project_id,),
+            ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return Project(**dict(row))
+
+    @app.post(
+        "/api/projects/{project_id}/tasks",
+        response_model=Task,
+        status_code=201,
+        responses={404: {"description": "Project not found"}},
+    )
+    def create_task(project_id: str, payload: TaskCreate) -> Task:
+        with closing(connect(database_path)) as connection:
+            with connection:
+                project = connection.execute(
+                    "SELECT id FROM projects WHERE id = ?", (project_id,)
+                ).fetchone()
+                if project is None:
+                    raise HTTPException(status_code=404, detail="Project not found")
+                task = Task(
+                    **payload.model_dump(),
+                    id=str(uuid4()),
+                    project_id=project_id,
+                    created_at=datetime.now(timezone.utc),
+                )
+                connection.execute(
+                    "INSERT INTO tasks (id, project_id, name, objective, scene, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        task.id,
+                        task.project_id,
+                        task.name,
+                        task.objective,
+                        task.scene,
+                        task.created_at.isoformat(),
+                    ),
+                )
+        return task
 
     return app
 
