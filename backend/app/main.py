@@ -137,6 +137,31 @@ def create_app(database_path: Path = DEFAULT_DATABASE_PATH) -> FastAPI:
                 )
         return task
 
+    @app.get(
+        "/api/projects/{project_id}/tasks",
+        response_model=list[Task],
+        responses={404: {"description": "Project not found"}},
+    )
+    def list_tasks(
+        project_id: str,
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+        offset: Annotated[int, Query(ge=0, le=9223372036854775807)] = 0,
+    ) -> list[Task]:
+        with closing(connect(database_path)) as connection:
+            connection.row_factory = sqlite3.Row
+            project = connection.execute(
+                "SELECT id FROM projects WHERE id = ?", (project_id,)
+            ).fetchone()
+            if project is None:
+                raise HTTPException(status_code=404, detail="Project not found")
+            rows = connection.execute(
+                "SELECT id, project_id, name, objective, scene, created_at "
+                "FROM tasks WHERE project_id = ? "
+                "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+                (project_id, limit, offset),
+            ).fetchall()
+        return [Task(**dict(row)) for row in rows]
+
     return app
 
 
