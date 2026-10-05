@@ -38,6 +38,11 @@ th:first-child { width: 30%; }
 th:last-child { width: 26%; }
 td { padding: 16px; overflow-wrap: anywhere; border-top: 1px solid #e8eaec; }
 .empty-state { height: 240px; text-align: center; color: #727980; }
+.pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 16px; font-size: 14px; }
+button { min-width: 36px; height: 36px; padding: 0 10px; border: 1px solid #cdd4d1; border-radius: 4px; background: #fff; color: #245a46; font: inherit; cursor: pointer; }
+button:hover:not(:disabled) { background: #e5f0eb; }
+button:disabled { opacity: 0.45; cursor: default; }
+.retry { margin-left: 12px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .skip-link { position: absolute; top: -80px; left: 16px; padding: 12px; background: #fff; z-index: 1; }
 .skip-link:focus { top: 8px; }
