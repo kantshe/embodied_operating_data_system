@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 
 import "./styles.css";
@@ -12,6 +12,11 @@ function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [hasNext, setHasNext] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -43,6 +48,32 @@ function App() {
     setPage(next);
   }
 
+  async function submitProject(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmedName = name.trim();
+    if (!trimmedName || submitting) return;
+    setSubmitting(true);
+    setSubmitError("");
+    try {
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmedName, description: description.trim() || null }),
+      });
+      if (!response.ok) throw new Error("Request failed");
+      setName("");
+      setDescription("");
+      setShowForm(false);
+      setStatus("loading");
+      setPage(0);
+      setAttempt((current) => current + 1);
+    } catch {
+      setSubmitError("创建失败，请重试");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div className="app">
       <a className="skip-link" href="#projects">跳到项目列表</a>
@@ -55,7 +86,23 @@ function App() {
           <a href="#projects" aria-current="page">项目</a>
         </nav>
         <main id="projects" className="content" tabIndex={-1}>
-          <h1>项目</h1>
+          <div className="content-header">
+            <h1>项目</h1>
+            {!showForm && <button className="primary-button" onClick={() => setShowForm(true)}>新建项目</button>}
+          </div>
+          {showForm && (
+            <form className="project-form" onSubmit={submitProject}>
+              <div className="form-fields">
+                <label>项目名称 <input autoFocus required value={name} onChange={(event) => setName(event.target.value)} /></label>
+                <label>描述 <input value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+              </div>
+              {submitError && <p className="form-error" role="alert">{submitError}</p>}
+              <div className="form-actions">
+                <button type="button" disabled={submitting} onClick={() => { setShowForm(false); setSubmitError(""); setName(""); setDescription(""); }}>取消</button>
+                <button className="primary-button" type="submit" disabled={submitting || !name.trim()}>{submitting ? "创建中…" : "创建"}</button>
+              </div>
+            </form>
+          )}
           <div className="table-scroll" role="region" aria-label="项目列表" tabIndex={0}>
             <table>
               <caption className="sr-only">项目列表</caption>
