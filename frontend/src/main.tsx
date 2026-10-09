@@ -2,11 +2,13 @@ import { StrictMode, useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 
 import "./styles.css";
+import { ProjectDetail } from "./ProjectDetail";
 
 type Project = { id: string; name: string; description: string | null; created_at: string };
 const PAGE_SIZE = 20;
 
 function App() {
+  const [projectId, setProjectId] = useState(() => readProjectId());
   const [page, setPage] = useState(0);
   const [attempt, setAttempt] = useState(0);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -17,6 +19,12 @@ function App() {
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
+
+  useEffect(() => {
+    const update = () => setProjectId(readProjectId());
+    window.addEventListener("hashchange", update);
+    return () => window.removeEventListener("hashchange", update);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -86,6 +94,7 @@ function App() {
           <a href="#projects" aria-current="page">项目</a>
         </nav>
         <main id="projects" className="content" tabIndex={-1}>
+          {projectId ? <ProjectDetail key={projectId} projectId={projectId} /> : <>
           <div className="content-header">
             <h1>项目</h1>
             {!showForm && <button className="primary-button" onClick={() => setShowForm(true)}>新建项目</button>}
@@ -121,7 +130,7 @@ function App() {
                   </td></tr>
                 ) : projects.map((project) => (
                   <tr key={project.id}>
-                    <td>{project.name}</td>
+                    <td><a className="project-link" href={`#project=${encodeURIComponent(project.id)}`}>{project.name}</a></td>
                     <td>{project.description || "—"}</td>
                     <td><time dateTime={project.created_at}>{new Date(project.created_at).toLocaleString("zh-CN", { hour12: false })}</time></td>
                   </tr>
@@ -134,10 +143,16 @@ function App() {
             <button aria-label="上一页" title="上一页" disabled={status === "loading" || page === 0} onClick={() => turnPage(page - 1)}>←</button>
             <button aria-label="下一页" title="下一页" disabled={status !== "ready" || !hasNext} onClick={() => turnPage(page + 1)}>→</button>
           </nav>
+          </>}
         </main>
       </div>
     </div>
   );
+}
+
+function readProjectId(): string | null {
+  const hash = window.location.hash.slice(1);
+  return hash.startsWith("project=") ? new URLSearchParams(hash).get("project") || null : null;
 }
 
 createRoot(document.getElementById("root")!).render(
