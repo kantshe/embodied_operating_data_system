@@ -75,12 +75,11 @@ class ImportManifest(ManifestModel):
     source: NonEmptyText
     episodes: list[EpisodeEntry] = Field(min_length=1, max_length=1000)
 
-    @model_validator(mode="after")
-    def validate_unique_ids(self):
-        ids = [episode.id for episode in self.episodes]
-        if len(ids) != len(set(ids)):
-            raise ValueError("Episode IDs must be unique within a manifest")
-        return self
+class EntryResult(BaseModel):
+    index: int
+    episode_id: str
+    status: Literal["imported", "skipped", "failed"]
+    detail: str | None = None
 
 
 class ImportResult(BaseModel):
@@ -90,3 +89,4 @@ class ImportResult(BaseModel):
     imported_at: AwareDatetime
     episode_ids: list[str]
     asset_count: int
+    results: list[EntryResult]

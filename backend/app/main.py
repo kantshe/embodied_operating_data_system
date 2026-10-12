@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, StringConstraints
 
 from app.database import connect, initialize_database
+from app.batch_import import import_batch
 from app.import_manifest import ImportManifest, ImportResult
 
 DEFAULT_DATABASE_PATH = Path(__file__).resolve().parents[1] / "data" / "system.db"
@@ -36,7 +37,13 @@ class Task(TaskCreate):
     created_at: datetime
 
 
-def create_app(database_path: Path = DEFAULT_DATABASE_PATH) -> FastAPI:
+def create_app(
+    database_path: Path = DEFAULT_DATABASE_PATH,
+    source_root: Path | None = None,
+    storage_root: Path | None = None,
+) -> FastAPI:
+    source_root = source_root or database_path.parent / "incoming"
+    storage_root = storage_root or database_path.parent / "assets"
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -169,74 +176,12 @@ def create_app(database_path: Path = DEFAULT_DATABASE_PATH) -> FastAPI:
         status_code=201,
         responses={
             404: {"description": "Project not found"},
-            409: {"description": "Episode ID already imported"},
-            422: {"description": "Invalid manifest or task ownership"},
+            409: {"description": "Database import conflict"},
+            422: {"description": "Invalid manifest"},
         },
     )
     def import_episodes(project_id: str, payload: ImportManifest) -> ImportResult:
-        batch_id = str(uuid4())
-        imported_at = datetime.now(timezone.utc)
-        with closing(connect(database_path)) as connection:
-            try:
-                with connection:
-                    # Hold one write transaction across ownership checks and inserts.
-                    connection.execute("BEGIN IMMEDIATE")
-                    project = connection.execute(
-                        "SELECT id FROM projects WHERE id = ?", (project_id,)
-                    ).fetchone()
-                    if project is None:
-                        raise HTTPException(status_code=404, detail="Project not found")
-                    for task_id in {str(item.task_id) for item in payload.episodes}:
-                        task = connection.execute(
-                            "SELECT id FROM tasks WHERE id = ? AND project_id = ?",
-                            (task_id, project_id),
-                        ).fetchone()
-                        if task is None:
-                            raise HTTPException(
-                                status_code=422,
-                                detail=f"Task does not belong to project: {task_id}",
-                            )
-                    for episode in payload.episodes:
-                        if connection.execute(
-                            "SELECT id FROM episodes WHERE id = ?", (str(episode.id),)
-                        ).fetchone():
-                            raise HTTPException(
-                                status_code=409,
-                                detail=f"Episode ID already imported: {episode.id}",
-                            )
-                    connection.execute(
-                        "INSERT INTO import_batches (id, project_id, source, imported_at) "
-                        "VALUES (?, ?, ?, ?)",
-                        (batch_id, project_id, payload.source, imported_at.isoformat()),
-                    )
-                    for episode in payload.episodes:
-                        connection.execute(
-                            "INSERT INTO episodes "
-                            "(id, task_id, import_batch_id, device_id, started_at, ended_at, "
-                            "outcome, source_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                            (
-                                str(episode.id), str(episode.task_id), batch_id,
-                                episode.device_id, episode.started_at.isoformat(),
-                                episode.ended_at.isoformat(), episode.outcome,
-                                episode.source_type, imported_at.isoformat(),
-                            ),
-                        )
-                        connection.executemany(
-                            "INSERT INTO assets (id, episode_id, path, asset_type) "
-                            "VALUES (?, ?, ?, ?)",
-                            [
-                                (str(uuid4()), str(episode.id), asset.path, asset.asset_type)
-                                for asset in episode.assets
-                            ],
-                        )
-            except sqlite3.IntegrityError as error:
-                raise HTTPException(status_code=409, detail="Import conflict") from error
-        return ImportResult(
-            id=batch_id, project_id=project_id, source=payload.source,
-            imported_at=imported_at,
-            episode_ids=[str(episode.id) for episode in payload.episodes],
-            asset_count=sum(len(episode.assets) for episode in payload.episodes),
-        )
+        return import_batch(database_path, source_root, storage_root, project_id, payload)
 
     return app
 

@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS episodes (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS import_results (
+    import_batch_id TEXT PRIMARY KEY REFERENCES import_batches(id),
+    results TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS assets (
     id TEXT PRIMARY KEY,
     episode_id TEXT NOT NULL REFERENCES episodes(id),

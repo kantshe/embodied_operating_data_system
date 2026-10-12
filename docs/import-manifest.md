@@ -8,14 +8,14 @@
 | schema_version | 固定字符串 `"1.0"` |
 | source | 必填、非空的来源名称，仅作标识，不作为服务器文件路径 |
 | episodes | 1 至 1000 条操作记录 |
-| episodes[].id | 必填 UUID，清单内不可重复，已导入的 ID 不可覆盖 |
+| episodes[].id | 必填 UUID，用于判重，已有记录不可覆盖 |
 | episodes[].task_id | 当前项目已有任务的 UUID |
 | episodes[].device_id | 必填、非空的设备标识 |
 | episodes[].started_at / ended_at | 带时区的 ISO 8601 字符串，结束时间必须晚于开始时间 |
 | episodes[].outcome | `pending`（默认）、`success` 或 `failure` |
 | episodes[].source_type | 必填：`synthetic`（合成）或 `collected`（采集） |
 | episodes[].assets | 至少一个文件引用，同一记录内路径不可重复 |
-| assets[].path | 相对清单所在目录的 POSIX 路径 |
+| assets[].path | 相对后端配置的来源目录的 POSIX 路径 |
 | assets[].asset_type | `video` 对应 `.mp4`，`state` 对应 `.csv`，`metadata` 对应 `.json` |
 
 所有层级拒绝未知字段；非空文本去除首尾空白。时间写入数据库时统一为 UTC，
@@ -24,23 +24,44 @@
 
 路径使用 `/` 分隔，不接受绝对路径、反斜线、冒号、控制字符、空路径段、
 `.` 或 `..`。路径按字面使用，不做 URL 解码。
-后续文件导入必须解析真实路径并确认仍在来源目录内，包括符号链接的目标。
+读取时逐级打开目录，拒绝文件和目录符号链接，仅接受普通文件。
 
-目前接口在单个事务中保存批次、操作记录和文件引用。任一记录格式错误、
-任务不属于当前项目或 ID 已存在时，整批拒绝，不留下部分记录。
+格式错误（包括未知字段、非法时间或路径）仍整批返回 `422`。
+格式有效的记录按清单顺序逐条处理，任务不属于当前项目、文件缺失或复制失败时，
+该条标为 `failed`，清理该条副本，其他记录继续处理。
+同一项目已有的 UUID 标为 `skipped`，清单内部重复同样处理；UUID 属于其他项目时
+标为 `failed`。判重只比较 UUID，不比较文件内容；同一 UUID 即使附带不同内容
+也不会覆盖原记录，不同 UUID 的相同文件仍会分别保存。
+
 成功返回 `201`，包含批次 `id`、`project_id`、`source`、`imported_at`、
-`episode_ids` 和 `asset_count`；项目不存在返回 `404`，ID 冲突返回 `409`，
-清单或任务归属错误返回 `422`。
+`episode_ids`（本次实际导入的 ID）、`asset_count`（本次保存的文件数）和 `results`。
+`results` 按原清单顺序返回 `index`（从 0 开始）、`episode_id`、
+`status`（`imported`、`skipped`、`failed`）与 `detail`（成功时为 `null`）。
+批次和结果会保存到数据库，即使全部跳过或失败也返回 `201`，
+因此判断逐条成功必须查看 `results`。
+项目不存在返回 `404`，数据库约束冲突返回 `409`。
 
-本阶段不读取或复制文件，不检查文件存在性。文件引用中的 `size_bytes` 和
-`checksum` 保持空值；实际文件保存和校验值记录在 6.2 实现。
-因此导入成功只代表元数据与引用已保存。
+## 来源与文件保存
+
+默认来源目录是 `backend/data/incoming`，来源名称 `source` 仅作标识，不拼接为路径。
+调用 `create_app(database_path, source_root=..., storage_root=...)` 可配置来源目录和
+存储目录；默认存储目录是数据库同级的 `assets`。
+提交前将关联文件放入来源目录，保留清单中的相对目录结构。
+服务按 `<批次 UUID>/<清单序号>/<文件 UUID>.<扩展名>` 保存副本，原文件保持不变。
+数据库 `assets.path` 相对存储目录，`size_bytes` 为实际字节数，
+`checksum` 是副本内容的 SHA-256 十六进制值（64 个字符）。
+
+数据库使用一个写事务；数据库错误时回滚整批记录并清理本次已写副本。
+复制异常时仅清理该条副本。进程被强制终止或掉电时可能留下未登记副本，
+本阶段没有实现崩溃后的孤立文件清理。已有元数据导入记录不会自动补齐文件；
+后续新增记录正常写入大小和校验值。
 
 ## 合成样例
 
 [`examples/synthetic-manifest.json`](../examples/synthetic-manifest.json)
 及其关联的状态 CSV 是人工构造的格式样例，不是设备采集数据。
-样例任务 ID 是占位 UUID，需要替换；再次导入前需为新记录生成新的 UUID。
+样例任务 ID 是占位 UUID，需要替换；同一 UUID 再次提交会跳过已导入记录。
+使用默认来源目录时，将 `examples/episodes` 复制至 `backend/data/incoming/episodes`。
 
 在 `backend` 目录可独立校验样例：
 

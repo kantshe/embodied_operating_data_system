@@ -1,6 +1,7 @@
 from contextlib import closing
 from copy import deepcopy
 import json
+import hashlib
 from pathlib import Path
 from uuid import uuid4
 
@@ -74,7 +75,7 @@ def test_manifest_rejects_version_unknown_fields_and_duplicates():
     payload = manifest_for(str(uuid4()))
     for changes in (
         {"schema_version": "2.0"}, {"source": " "}, {"episodes": []},
-        {"extra": True}, {"episodes": payload["episodes"] * 2},
+        {"extra": True},
     ):
         with pytest.raises(ValidationError):
             ImportManifest.model_validate({**payload, **changes})
@@ -92,7 +93,7 @@ def test_manifest_rejects_version_unknown_fields_and_duplicates():
 
 def test_import_persists_batch_tasks_and_file_references(tmp_path):
     database_path = tmp_path / "test.db"
-    with TestClient(create_app(database_path)) as client:
+    with TestClient(create_app(database_path, source_root=EXAMPLES)) as client:
         project = client.post("/api/projects", json={"name": "Experiment"}).json()
         task_url = f"/api/projects/{project['id']}/tasks"
         tasks = [client.post(task_url, json={"name": name}).json() for name in ("A", "B")]
@@ -121,15 +122,23 @@ def test_import_persists_batch_tasks_and_file_references(tmp_path):
                 episode["task_id"], result["id"], "2026-10-10T01:00:00+00:00",
                 "2026-10-10T01:00:02+00:00", episode["source_type"],
             )
-        assert connection.execute(
+        stored = connection.execute(
             "SELECT path, size_bytes, checksum FROM assets"
-        ).fetchall() == [("episodes/example/state.csv", None, None)] * 2
+        ).fetchall()
+        content = (EXAMPLES / "episodes/example/state.csv").read_bytes()
+        for path, size, checksum in stored:
+            assert (tmp_path / "assets" / path).read_bytes() == content
+            assert size == len(content)
+            assert checksum == hashlib.sha256(content).hexdigest()
+        assert json.loads(connection.execute(
+            "SELECT results FROM import_results WHERE import_batch_id = ?", (result["id"],)
+        ).fetchone()[0]) == result["results"]
 
 
 @pytest.mark.parametrize("invalid_task", ["missing", "other_project"])
-def test_import_rejects_task_ownership_without_partial_writes(tmp_path, invalid_task):
+def test_import_reports_task_ownership_per_entry(tmp_path, invalid_task):
     database_path = tmp_path / "test.db"
-    with TestClient(create_app(database_path)) as client:
+    with TestClient(create_app(database_path, source_root=EXAMPLES)) as client:
         project = client.post("/api/projects", json={"name": "Experiment"}).json()
         task = client.post(
             f"/api/projects/{project['id']}/tasks", json={"name": "A"}
@@ -146,13 +155,14 @@ def test_import_rejects_task_ownership_without_partial_writes(tmp_path, invalid_
         second.update(id=str(uuid4()), task_id=foreign_id)
         payload["episodes"].append(second)
         response = client.post(f"/api/projects/{project['id']}/imports", json=payload)
-    assert response.status_code == 422
-    assert counts(database_path) == (0, 0, 0)
+    assert response.status_code == 201
+    assert [item["status"] for item in response.json()["results"]] == ["imported", "failed"]
+    assert counts(database_path) == (1, 1, 1)
 
 
 def test_import_missing_project_invalid_payload_and_conflict_are_atomic(tmp_path):
     database_path = tmp_path / "test.db"
-    with TestClient(create_app(database_path)) as client:
+    with TestClient(create_app(database_path, source_root=EXAMPLES)) as client:
         payload = manifest_for(str(uuid4()))
         assert client.post("/api/projects/missing/imports", json=payload).status_code == 404
         project = client.post("/api/projects", json={"name": "Experiment"}).json()
@@ -169,17 +179,24 @@ def test_import_missing_project_invalid_payload_and_conflict_are_atomic(tmp_path
         fresh = deepcopy(payload["episodes"][0])
         fresh["id"] = str(uuid4())
         payload["episodes"].insert(0, fresh)
-        assert client.post(url, json=payload).status_code == 409
-        assert counts(database_path) == (1, 1, 1)
+        response = client.post(url, json=payload)
+        assert response.status_code == 201
+        assert [item["status"] for item in response.json()["results"]] == ["imported", "skipped"]
+        assert counts(database_path) == (2, 2, 2)
         with closing(connect(database_path)) as connection:
             assert connection.execute(
                 "SELECT id FROM episodes WHERE id = ?", (fresh["id"],)
-            ).fetchone() is None
+            ).fetchone() is not None
+        retry = client.post(url, json=payload).json()
+        assert [item["status"] for item in retry["results"]] == ["skipped", "skipped"]
+        assert retry["asset_count"] == 0
+        assert retry["episode_ids"] == []
+        assert counts(database_path) == (3, 2, 2)
 
 
 def test_import_rolls_back_on_database_insert_failure(tmp_path):
     database_path = tmp_path / "test.db"
-    with TestClient(create_app(database_path)) as client:
+    with TestClient(create_app(database_path, source_root=EXAMPLES)) as client:
         project = client.post("/api/projects", json={"name": "Experiment"}).json()
         task = client.post(
             f"/api/projects/{project['id']}/tasks", json={"name": "A"}
@@ -194,3 +211,77 @@ def test_import_rolls_back_on_database_insert_failure(tmp_path):
         )
     assert response.status_code == 409
     assert counts(database_path) == (0, 0, 0)
+    assert list((tmp_path / "assets").iterdir()) == []
+
+
+@pytest.mark.parametrize("failure", ["missing", "directory", "symlink", "partial", "parent_symlink"])
+def test_failed_files_are_cleaned_and_valid_entries_continue(tmp_path, failure):
+    source = tmp_path / "incoming"
+    source.mkdir()
+    (source / "good.csv").write_bytes(b"timestamp_s,value\n0,1\n")
+    if failure == "directory":
+        (source / "bad.csv").mkdir()
+    elif failure == "symlink":
+        outside = tmp_path / "outside.csv"
+        outside.write_bytes(b"outside")
+        (source / "bad.csv").symlink_to(outside)
+    elif failure == "parent_symlink":
+        (tmp_path / "bad.csv").write_bytes(b"outside")
+        (source / "link").symlink_to(tmp_path, target_is_directory=True)
+    database_path = tmp_path / "test.db"
+    with TestClient(create_app(database_path)) as client:
+        project = client.post("/api/projects", json={"name": "A"}).json()
+        task = client.post(
+            f"/api/projects/{project['id']}/tasks", json={"name": "A"}
+        ).json()
+        payload = manifest_for(task["id"])
+        bad = payload["episodes"][0]
+        bad["assets"] = [{"path": "bad.csv", "asset_type": "state"}]
+        if failure == "parent_symlink":
+            bad["assets"][0]["path"] = "link/bad.csv"
+        if failure == "partial":
+            bad["assets"].insert(0, {"path": "good.csv", "asset_type": "state"})
+        good = deepcopy(bad)
+        good["id"] = str(uuid4())
+        good["assets"] = [{"path": "good.csv", "asset_type": "state"}]
+        payload["episodes"].append(good)
+        result = client.post(f"/api/projects/{project['id']}/imports", json=payload).json()
+    assert [item["status"] for item in result["results"]] == ["failed", "imported"]
+    assert result["episode_ids"] == [good["id"]]
+    assert counts(database_path) == (1, 1, 1)
+    assert not (tmp_path / "assets" / result["id"] / "0").exists()
+    assert len(list((tmp_path / "assets").rglob("*.csv"))) == 1
+    assert (source / "good.csv").read_bytes() == b"timestamp_s,value\n0,1\n"
+
+
+def test_duplicates_within_manifest_and_other_project_do_not_overwrite(tmp_path):
+    database_path = tmp_path / "test.db"
+    with TestClient(create_app(database_path, source_root=EXAMPLES)) as client:
+        projects = [client.post("/api/projects", json={"name": name}).json() for name in ("A", "B")]
+        tasks = [client.post(
+            f"/api/projects/{project['id']}/tasks", json={"name": "Pick"}
+        ).json() for project in projects]
+        payload = manifest_for(tasks[0]["id"])
+        payload["episodes"] *= 2
+        result = client.post(f"/api/projects/{projects[0]['id']}/imports", json=payload).json()
+        assert [item["status"] for item in result["results"]] == ["imported", "skipped"]
+        payload = manifest_for(tasks[1]["id"])
+        result = client.post(f"/api/projects/{projects[1]['id']}/imports", json=payload).json()
+        assert result["results"][0]["status"] == "failed"
+        assert counts(database_path) == (2, 1, 1)
+
+
+def test_results_table_added_to_existing_database(tmp_path):
+    from app.database import initialize_database
+    database_path = tmp_path / "test.db"
+    initialize_database(database_path)
+    with closing(connect(database_path)) as connection:
+        connection.execute("DROP TABLE import_results")
+        connection.execute(
+            "INSERT INTO projects VALUES ('legacy', 'Legacy', NULL, '2026-10-10')"
+        )
+        connection.commit()
+    with TestClient(create_app(database_path)) as client:
+        assert client.get("/api/projects/legacy").status_code == 200
+    with closing(connect(database_path)) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM import_results").fetchone()[0] == 0
