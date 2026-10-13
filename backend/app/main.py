@@ -2,11 +2,11 @@ from contextlib import asynccontextmanager, closing
 from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel, StringConstraints
+from pydantic import AwareDatetime, BaseModel, StringConstraints
 
 from app.database import connect, initialize_database
 from app.batch_import import import_batch
@@ -34,6 +34,19 @@ class TaskCreate(BaseModel):
 class Task(TaskCreate):
     id: str
     project_id: str
+    created_at: datetime
+
+
+class Episode(BaseModel):
+    id: str
+    task_id: str
+    task_name: str
+    import_batch_id: str | None
+    device_id: str | None
+    started_at: datetime | None
+    ended_at: datetime | None
+    outcome: str
+    source_type: str
     created_at: datetime
 
 
@@ -182,6 +195,43 @@ def create_app(
     )
     def import_episodes(project_id: str, payload: ImportManifest) -> ImportResult:
         return import_batch(database_path, source_root, storage_root, project_id, payload)
+
+    @app.get("/api/projects/{project_id}/episodes", response_model=list[Episode])
+    def list_episodes(
+        project_id: str,
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+        offset: Annotated[int, Query(ge=0, le=9223372036854775807)] = 0,
+        task_id: str | None = None,
+        device_id: str | None = None,
+        outcome: Literal["pending", "success", "failure"] | None = None,
+        started_from: AwareDatetime | None = None,
+        started_to: AwareDatetime | None = None,
+    ) -> list[Episode]:
+        if started_from and started_to and started_from > started_to:
+            raise HTTPException(status_code=422, detail="Invalid start time range")
+        conditions = ["t.project_id = ?"]
+        parameters: list = [project_id]
+        for field, value in (("task_id", task_id), ("device_id", device_id), ("outcome", outcome)):
+            if value is not None:
+                conditions.append(f"e.{field} = ?")
+                parameters.append(value)
+        for operator, value in ((">=", started_from), ("<=", started_to)):
+            if value is not None:
+                conditions.append(f"julianday(e.started_at) {operator} julianday(?)")
+                parameters.append(value.astimezone(timezone.utc).isoformat())
+        with closing(connect(database_path)) as connection:
+            connection.row_factory = sqlite3.Row
+            if not connection.execute(
+                "SELECT id FROM projects WHERE id = ?", (project_id,)
+            ).fetchone():
+                raise HTTPException(status_code=404, detail="Project not found")
+            rows = connection.execute(
+                "SELECT e.*, t.name AS task_name FROM episodes e "
+                "JOIN tasks t ON t.id = e.task_id WHERE " + " AND ".join(conditions) +
+                " ORDER BY julianday(e.created_at) DESC, e.id DESC LIMIT ? OFFSET ?",
+                [*parameters, limit, offset],
+            ).fetchall()
+        return [Episode(**dict(row)) for row in rows]
 
     return app
 

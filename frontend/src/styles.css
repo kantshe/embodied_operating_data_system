@@ -39,6 +39,18 @@ h1 { font-size: 24px; line-height: 1.4; margin: 0 0 24px; }
 .form-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .form-fields label { display: grid; gap: 8px; font-size: 14px; }
 .form-fields input { width: 100%; min-height: 38px; padding: 8px 10px; border: 1px solid #b9c3c0; border-radius: 4px; font: inherit; }
+.form-fields select, .form-fields textarea { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid #b9c3c0; border-radius: 4px; font: inherit; background: #fff; }
+.form-fields textarea { resize: vertical; font-family: ui-monospace, monospace; }
+.full-width { grid-column: 1 / -1; }
+.filter-fields { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.view-tabs { display: flex; gap: 20px; border-bottom: 1px solid #dfe3e5; margin-bottom: 24px; }
+.view-tabs button { border: 0; border-radius: 0; border-bottom: 2px solid transparent; height: 44px; background: none; }
+.view-tabs button[aria-selected="true"] { border-bottom-color: #28654f; font-weight: 600; }
+.episode-table { min-width: 980px; }
+.episode-table th:first-child { width: 22%; }
+.episode-table th:last-child { width: 8%; }
+.episode-table th:nth-child(4), .episode-table th:nth-child(5) { width: 18%; }
+.batch-id { font-size: 14px; overflow-wrap: anywhere; }
 .form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .form-error { margin: 12px 0 0; color: #a02e2e; font-size: 14px; }
 .project-link, .back-link { color: #245a46; text-underline-offset: 3px; }

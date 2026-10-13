@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { Episodes } from "./Episodes";
 
 type Project = { id: string; name: string; description: string | null; created_at: string };
 type Task = { id: string; project_id: string; name: string; objective: string | null; scene: string | null; created_at: string };
@@ -21,6 +22,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [scene, setScene] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [view, setView] = useState<"tasks" | "episodes" | "imports">("tasks");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -113,7 +115,24 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         <dt>描述</dt><dd>{project.description || "—"}</dd>
         <dt>创建时间</dt><dd><time dateTime={project.created_at}>{formatDate(project.created_at)}</time></dd>
       </dl>
-      <section aria-label="项目任务">
+      <div className="view-tabs" role="tablist" aria-label="项目视图">
+        {(["tasks", "episodes", "imports"] as const).map((value) => <button
+          key={value} role="tab" id={`tab-${value}`} aria-selected={view === value}
+          tabIndex={view === value ? 0 : -1}
+          aria-controls="project-panel" onClick={() => setView(value)}
+          onKeyDown={(event) => {
+            const views = ["tasks", "episodes", "imports"] as const;
+            const index = views.indexOf(value);
+            const next = event.key === "ArrowRight" ? views[(index + 1) % 3] :
+              event.key === "ArrowLeft" ? views[(index + 2) % 3] :
+              event.key === "Home" ? views[0] : event.key === "End" ? views[2] : null;
+            if (next) { event.preventDefault(); setView(next); document.getElementById(`tab-${next}`)?.focus(); }
+          }}
+        >{{ tasks: "任务", episodes: "操作记录", imports: "导入" }[value]}</button>)}
+      </div>
+      <div id="project-panel" role="tabpanel" aria-labelledby={`tab-${view}`}>
+      <div hidden={view === "tasks"}><Episodes projectId={projectId} view={view === "imports" ? "imports" : "episodes"} /></div>
+      <section aria-label="项目任务" hidden={view !== "tasks"}>
         <div className="content-header">
           <h2>任务</h2>
           {!showForm && <button className="primary-button" onClick={() => setShowForm(true)}>新建任务</button>}
@@ -151,6 +170,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           <button aria-label="下一页" title="下一页" disabled={taskStatus !== "ready" || !hasNext} onClick={() => turnPage(page + 1)}>→</button>
         </nav>
       </section>
+      </div>
     </>}
   </>;
 }
