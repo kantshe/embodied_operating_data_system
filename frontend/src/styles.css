@@ -51,6 +51,14 @@ h1 { font-size: 24px; line-height: 1.4; margin: 0 0 24px; }
 .episode-table th:last-child { width: 8%; }
 .episode-table th:nth-child(4), .episode-table th:nth-child(5) { width: 18%; }
 .batch-id { font-size: 14px; overflow-wrap: anywhere; }
+.detail-section { margin-top: 32px; }
+.asset-item { padding: 20px 0; border-bottom: 1px solid #dfe3e5; }
+.asset-item h3 { margin: 0 0 20px; font-size: 16px; }
+.asset-item .project-info { margin-bottom: 20px; }
+.episode-video { display: block; width: 100%; max-width: 800px; aspect-ratio: 16 / 9; background: #17191b; }
+.check-issues { padding-left: 24px; line-height: 1.7; overflow-wrap: anywhere; }
+.state-preview { table-layout: auto; }
+.state-preview th:first-child, .state-preview th:last-child { width: auto; }
 .form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .form-error { margin: 12px 0 0; color: #a02e2e; font-size: 14px; }
 .project-link, .back-link { color: #245a46; text-underline-offset: 3px; }

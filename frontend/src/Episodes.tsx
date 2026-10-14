@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { EpisodeDetail } from "./EpisodeDetail";
 
 type Episode = {
   id: string; task_id: string; task_name: string; device_id: string | null;
@@ -22,7 +23,7 @@ const reasons: Record<string, string> = {
 };
 const emptyFilters = { task_id: "", device_id: "", outcome: "", started_from: "", started_to: "" };
 
-export function Episodes({ projectId, view }: { projectId: string; view: "episodes" | "imports" }) {
+export function Episodes({ projectId, view, active }: { projectId: string; view: "episodes" | "imports"; active: boolean }) {
   const base = `/api/projects/${encodeURIComponent(projectId)}`;
   const [entries, setEntries] = useState<Episode[]>([]);
   const [status, setStatus] = useState("loading");
@@ -41,6 +42,13 @@ export function Episodes({ projectId, view }: { projectId: string; view: "episod
   const [submitting, setSubmitting] = useState(false);
   const [reading, setReading] = useState(false);
   const fileAttempt = useRef(0);
+  const [episodeId, setEpisodeId] = useState(readEpisodeId);
+
+  useEffect(() => {
+    const update = () => setEpisodeId(readEpisodeId());
+    window.addEventListener("hashchange", update);
+    return () => window.removeEventListener("hashchange", update);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -144,6 +152,7 @@ export function Episodes({ projectId, view }: { projectId: string; view: "episod
     finally { setSubmitting(false); }
   }
 
+  if (!active) return null;
   return view === "imports" ? <section aria-label="批次导入">
     <h2>批次导入</h2>
     <form className="project-form" onSubmit={submitImport}>
@@ -162,7 +171,7 @@ export function Episodes({ projectId, view }: { projectId: string; view: "episod
         <tbody>{result.results.map((item) => <tr key={item.index}><td>{item.episode_id}</td><td>{labels[item.status]}</td><td>{item.detail ? reasons[item.detail] || item.detail : "—"}</td></tr>)}</tbody>
       </table></div>
     </>}
-  </section> : <section aria-label="操作记录">
+  </section> : episodeId ? <EpisodeDetail key={episodeId} projectId={projectId} episodeId={episodeId} /> : <section aria-label="操作记录">
     <h2>操作记录</h2>
     <form className="project-form" onSubmit={applyFilters}>
       <div className="form-fields filter-fields">
@@ -189,7 +198,7 @@ export function Episodes({ projectId, view }: { projectId: string; view: "episod
         <span role="status">{status === "loading" ? "加载中…" : status === "error" ? "记录加载失败" : "暂无操作记录"}</span>
         {status === "error" && <button className="retry" onClick={() => setAttempt((value) => value + 1)}>重试</button>}
       </td></tr> : entries.map((item) => <tr key={item.id}>
-        <td>{item.id}</td><td>{item.task_name}</td><td>{item.device_id || "—"}</td>
+        <td><a className="project-link" href={`#project=${encodeURIComponent(projectId)}&episode=${encodeURIComponent(item.id)}`}>{item.id}</a></td><td>{item.task_name}</td><td>{item.device_id || "—"}</td>
         <td>{formatDate(item.started_at)}</td><td>{formatDate(item.ended_at)}</td>
         <td>{labels[item.outcome] || item.outcome}</td><td>{labels[item.source_type] || item.source_type}</td>
       </tr>)}</tbody>
@@ -203,4 +212,8 @@ export function Episodes({ projectId, view }: { projectId: string; view: "episod
 
 function formatDate(value: string | null) {
   return value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "—";
+}
+
+function readEpisodeId() {
+  return new URLSearchParams(window.location.hash.slice(1)).get("episode");
 }

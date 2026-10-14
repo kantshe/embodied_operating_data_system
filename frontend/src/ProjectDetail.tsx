@@ -22,7 +22,17 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [scene, setScene] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const [view, setView] = useState<"tasks" | "episodes" | "imports">("tasks");
+  const [view, setView] = useState<"tasks" | "episodes" | "imports">(
+    () => new URLSearchParams(window.location.hash.slice(1)).has("episode") ? "episodes" : "tasks"
+  );
+
+  useEffect(() => {
+    const update = () => {
+      if (new URLSearchParams(window.location.hash.slice(1)).has("episode")) setView("episodes");
+    };
+    window.addEventListener("hashchange", update);
+    return () => window.removeEventListener("hashchange", update);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -131,7 +141,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         >{{ tasks: "任务", episodes: "操作记录", imports: "导入" }[value]}</button>)}
       </div>
       <div id="project-panel" role="tabpanel" aria-labelledby={`tab-${view}`}>
-      <div hidden={view === "tasks"}><Episodes projectId={projectId} view={view === "imports" ? "imports" : "episodes"} /></div>
+      <div hidden={view === "tasks"}><Episodes projectId={projectId} view={view === "imports" ? "imports" : "episodes"} active={view !== "tasks"} /></div>
       <section aria-label="项目任务" hidden={view !== "tasks"}>
         <div className="content-header">
           <h2>任务</h2>
