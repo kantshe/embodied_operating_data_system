@@ -92,6 +92,7 @@ export function Episodes({ projectId, view, active }: { projectId: string; view:
           typeof item.outcome === "string" && typeof item.source_type === "string"
         )) throw new Error();
         if (!controller.signal.aborted) {
+          if (!data.length && page > 0) { setPage(page - 1); return; }
           setEntries(data.slice(0, PAGE_SIZE)); setHasNext(data.length > PAGE_SIZE); setStatus("ready");
         }
       } catch {
@@ -171,7 +172,7 @@ export function Episodes({ projectId, view, active }: { projectId: string; view:
         <tbody>{result.results.map((item) => <tr key={item.index}><td>{item.episode_id}</td><td>{labels[item.status]}</td><td>{item.detail ? reasons[item.detail] || item.detail : "—"}</td></tr>)}</tbody>
       </table></div>
     </>}
-  </section> : episodeId ? <EpisodeDetail key={episodeId} projectId={projectId} episodeId={episodeId} /> : <section aria-label="操作记录">
+  </section> : episodeId ? <EpisodeDetail key={episodeId} projectId={projectId} episodeId={episodeId} onChanged={() => setAttempt((value) => value + 1)} /> : <section aria-label="操作记录">
     <h2>操作记录</h2>
     <form className="project-form" onSubmit={applyFilters}>
       <div className="form-fields filter-fields">

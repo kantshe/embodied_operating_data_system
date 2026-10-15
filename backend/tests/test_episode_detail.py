@@ -60,9 +60,9 @@ def test_detail_and_fresh_basic_check(record):
     check = client.post(url + "/quality-check").json()
     assert check["passed"] is True
     assert check["issues"] == []
-    # This step returns a fresh inspection; report history is a later feature.
     with closing(connect(database)) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM quality_reports").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM quality_reports").fetchone()[0] == 1
+    assert client.get(url + "/quality-reports/" + check["id"]).json() == check
     (storage / "batch/state.csv").unlink()
     assert client.get(url).json()["assets"][0]["status"] == "missing"
     check = client.post(url + "/quality-check").json()

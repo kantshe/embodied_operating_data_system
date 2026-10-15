@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { AnnotationEditor, QualityReview, type Annotation } from "./EpisodeReview";
 
 type Summary = {
   status: string; columns: string[]; row_count: number | null;
@@ -9,14 +10,10 @@ type Asset = {
   actual_size_bytes: number | null; checksum: string | null;
   status: string; state_summary: Summary | null;
 };
-type Detail = {
+type Detail = Annotation & {
   id: string; task_id: string; task_name: string; import_batch_id: string | null;
   device_id: string | null; started_at: string | null; ended_at: string | null;
   outcome: string; source_type: string; created_at: string; assets: Asset[];
-};
-type Check = {
-  passed: boolean; checked_at: string;
-  issues: { code: string; field: string; asset_id: string | null }[];
 };
 const labels: Record<string, string> = {
   video: "视频", state: "状态数据", metadata: "元数据",
@@ -30,18 +27,15 @@ const labels: Record<string, string> = {
   path: "文件路径", asset_type: "文件类型", task_id: "任务 ID", id: "记录 ID",
 };
 
-export function EpisodeDetail({ projectId, episodeId }: { projectId: string; episodeId: string }) {
+export function EpisodeDetail({ projectId, episodeId, onChanged }: { projectId: string; episodeId: string; onChanged: () => void }) {
   const url = `/api/projects/${encodeURIComponent(projectId)}/episodes/${encodeURIComponent(episodeId)}`;
   const [detail, setDetail] = useState<Detail | null>(null);
   const [status, setStatus] = useState("loading");
   const [attempt, setAttempt] = useState(0);
-  const [check, setCheck] = useState<Check | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [checkError, setCheckError] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
-    setStatus("loading"); setCheck(null); setCheckError("");
+    setStatus("loading");
     async function load() {
       try {
         const response = await fetch(url, { signal: controller.signal });
@@ -62,22 +56,6 @@ export function EpisodeDetail({ projectId, episodeId }: { projectId: string; epi
     return () => controller.abort();
   }, [url, episodeId, attempt]);
 
-  async function runCheck() {
-    if (checking) return;
-    setChecking(true); setCheckError(""); setCheck(null);
-    try {
-      const response = await fetch(`${url}/quality-check`, { method: "POST" });
-      if (!response.ok) throw new Error();
-      const data = await response.json();
-      if (typeof data.passed !== "boolean" || typeof data.checked_at !== "string" ||
-        !Array.isArray(data.issues) || !data.issues.every((issue: Check["issues"][number]) =>
-          issue && typeof issue.code === "string" && typeof issue.field === "string"
-        )) throw new Error();
-      setCheck(data);
-    } catch { setCheckError("检查失败，请重试"); }
-    finally { setChecking(false); }
-  }
-
   return <section aria-label="记录详情">
     <a className="back-link" href={`#project=${encodeURIComponent(projectId)}`}>返回操作记录</a>
     {status !== "ready" || !detail ? <div className="detail-status" role="status">
@@ -85,7 +63,7 @@ export function EpisodeDetail({ projectId, episodeId }: { projectId: string; epi
       {status === "error" && <button className="retry" onClick={() => setAttempt((value) => value + 1)}>重试详情</button>}
     </div> : <>
       <div className="content-header"><h2>记录详情</h2>
-        <button disabled={checking} onClick={() => setAttempt((value) => value + 1)}>刷新详情</button>
+        <button onClick={() => setAttempt((value) => value + 1)}>刷新详情</button>
       </div>
       <dl className="project-info episode-info">
         <dt>记录 ID</dt><dd>{detail.id}</dd>
@@ -95,22 +73,15 @@ export function EpisodeDetail({ projectId, episodeId }: { projectId: string; epi
         <dt>开始时间</dt><dd>{formatDate(detail.started_at)}</dd>
         <dt>结束时间</dt><dd>{formatDate(detail.ended_at)}</dd>
         <dt>结果</dt><dd>{labels[detail.outcome] || detail.outcome || "—"}</dd>
+        {detail.failure_reason && <><dt>失败原因</dt><dd>{detail.failure_reason}</dd></>}
         <dt>数据来源</dt><dd>{labels[detail.source_type] || detail.source_type || "—"}</dd>
         <dt>创建时间</dt><dd>{formatDate(detail.created_at)}</dd>
       </dl>
-      <section aria-label="基础检查" className="detail-section">
-        <div className="content-header"><h2>基础检查</h2>
-          <button className="primary-button" disabled={checking} onClick={() => void runCheck()}>{checking ? "检查中…" : "检查字段与文件"}</button>
-        </div>
-        {checkError && <p role="alert" className="form-error">{checkError}</p>}
-        {check && <>
-          <p role="status">{check.passed ? "必填字段与关联文件检查通过" : `发现 ${check.issues.length} 个问题`} · {formatDate(check.checked_at)}</p>
-          {!!check.issues.length && <ul className="check-issues">{check.issues.map((issue, index) => <li key={index}>
-            {labels[issue.code] || issue.code}：{labels[issue.field] || issue.field}
-            {issue.asset_id && <span>（{detail.assets.find((asset) => asset.id === issue.asset_id)?.path || issue.asset_id}）</span>}
-          </li>)}</ul>}
-        </>}
-      </section>
+      <AnnotationEditor url={url} value={detail} onSaved={(value) => {
+        setDetail({ ...detail, outcome: value.outcome, failure_reason: value.failure_reason, annotation_version: value.annotation_version });
+        onChanged();
+      }} />
+      <QualityReview url={url} assets={detail.assets} />
       <section aria-label="关联文件" className="detail-section">
         <h2>关联文件</h2>
         {!detail.assets.length && <p role="status">暂无关联文件</p>}

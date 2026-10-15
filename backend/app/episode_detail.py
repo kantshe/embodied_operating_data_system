@@ -3,17 +3,23 @@ import csv
 from datetime import datetime, timezone
 import errno
 import io
+import json
 import os
 from pathlib import Path
 import re
 import sqlite3
 import stat
+from typing import Annotated
+from uuid import uuid4
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
 from app.database import connect
+from app.quality_checks import (
+    INCOMPLETE_CODES, RULE_VERSION, IssueLimit, Issues, check_sequence, record_duration,
+)
 
 SUMMARY_BYTES = 2 * 1024 * 1024
 SUMMARY_ROWS = 10000
@@ -104,19 +110,21 @@ def inspect_asset(storage_root: Path, asset: dict) -> dict:
 def episode_router(database_path: Path, storage_root: Path) -> APIRouter:
     router = APIRouter(prefix="/api/projects/{project_id}/episodes/{episode_id}")
 
-    def load(project_id: str, episode_id: str):
-        with closing(connect(database_path)) as connection:
-            connection.row_factory = sqlite3.Row
-            episode = connection.execute(
-                "SELECT e.*, t.name AS task_name FROM episodes e "
-                "JOIN tasks t ON e.task_id = t.id WHERE e.id = ? AND t.project_id = ?",
-                (episode_id, project_id),
-            ).fetchone()
-            if episode is None:
-                raise HTTPException(status_code=404, detail="Episode not found")
-            assets = connection.execute(
-                "SELECT * FROM assets WHERE episode_id = ? ORDER BY id", (episode_id,)
-            ).fetchall()
+    def load(project_id: str, episode_id: str, connection=None):
+        if connection is None:
+            with closing(connect(database_path)) as connection:
+                return load(project_id, episode_id, connection)
+        connection.row_factory = sqlite3.Row
+        episode = connection.execute(
+            "SELECT e.*, t.name AS task_name FROM episodes e "
+            "JOIN tasks t ON e.task_id = t.id WHERE e.id = ? AND t.project_id = ?",
+            (episode_id, project_id),
+        ).fetchone()
+        if episode is None:
+            raise HTTPException(status_code=404, detail="Episode not found")
+        assets = connection.execute(
+            "SELECT * FROM assets WHERE episode_id = ? ORDER BY id", (episode_id,)
+        ).fetchall()
         return dict(episode), [dict(asset) for asset in assets]
 
     @router.get("")
@@ -126,12 +134,29 @@ def episode_router(database_path: Path, storage_root: Path) -> APIRouter:
 
     @router.post("/quality-check")
     def check(project_id: str, episode_id: str):
-        episode, assets = load(project_id, episode_id)
-        issues = []
+        with closing(connect(database_path)) as connection:
+            with connection:
+                # Keep the inspected metadata stable until its report is committed.
+                connection.execute("BEGIN IMMEDIATE")
+                episode, assets = load(project_id, episode_id, connection)
+                issues = Issues()
+                try:
+                    evaluate(episode, assets, issues)
+                except IssueLimit:
+                    pass
+                report = {
+                    "id": str(uuid4()), "episode_id": episode_id, "rule_version": RULE_VERSION,
+                    "checked_at": datetime.now(timezone.utc).isoformat(), "issues": list(issues),
+                }
+                connection.execute(
+                    "INSERT INTO quality_reports (id,episode_id,rule_version,issues,checked_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (report["id"], episode_id, RULE_VERSION, json.dumps(issues), report["checked_at"]),
+                )
+        return report_result(report)
 
-        def issue(code, field, asset_id=None):
-            issues.append({"code": code, "field": field, "asset_id": asset_id})
-
+    def evaluate(episode, assets, issues):
+        issue = issues.add
         for field in ("id", "task_id", "device_id", "started_at", "ended_at", "outcome", "source_type", "created_at"):
             value = episode[field]
             if value is None or not str(value).strip():
@@ -140,6 +165,9 @@ def episode_router(database_path: Path, storage_root: Path) -> APIRouter:
             issue("invalid_value", "outcome")
         if episode["source_type"] not in ("synthetic", "collected"):
             issue("invalid_value", "source_type")
+        if episode["outcome"] == "failure" and not (episode["failure_reason"] or "").strip():
+            issue("required_field", "failure_reason")
+        duration = record_duration(episode, issues)
         if not assets:
             issue("required_assets", "assets")
         for asset in assets:
@@ -148,16 +176,53 @@ def episode_router(database_path: Path, storage_root: Path) -> APIRouter:
                     issue("required_field", field, asset["id"])
             if asset["asset_type"] not in ("video", "state", "metadata"):
                 issue("invalid_value", "asset_type", asset["id"])
-            inspected = inspect_asset(storage_root, asset)
-            if inspected["status"] != "available":
-                issue("file_" + inspected["status"], "path", asset["id"])
-            elif inspected["actual_size_bytes"] == 0:
-                issue("empty_file", "path", asset["id"])
-        return {
-            "episode_id": episode_id, "rule_version": "required-files-v1",
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-            "passed": not issues, "issues": issues,
-        }
+            try:
+                with open_asset(storage_root, asset["path"]) as stream:
+                    before = os.fstat(stream.fileno())
+                    if before.st_size == 0:
+                        issue("empty_file", "path", asset["id"])
+                    elif asset["asset_type"] == "state":
+                        check_sequence(stream, duration, asset["id"], issues)
+                    after = os.fstat(stream.fileno())
+                    if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                        after.st_size, after.st_mtime_ns, after.st_ctime_ns
+                    ):
+                        issue("file_changed", "path", asset["id"])
+            except (OSError, ValueError) as error:
+                issue("file_" + file_status(error), "path", asset["id"])
+
+    def report_result(row):
+        data = dict(row)
+        if isinstance(data["issues"], str):
+            data["issues"] = json.loads(data["issues"])
+        return {**data, "passed": not data["issues"],
+                "complete": not any(item["code"] in INCOMPLETE_CODES for item in data["issues"])}
+
+    @router.get("/quality-reports")
+    def reports(
+        project_id: str, episode_id: str,
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+        offset: Annotated[int, Query(ge=0, le=9223372036854775807)] = 0,
+    ):
+        with closing(connect(database_path)) as connection:
+            load(project_id, episode_id, connection)
+            rows = connection.execute(
+                "SELECT * FROM quality_reports WHERE episode_id=? "
+                "ORDER BY checked_at DESC, rowid DESC LIMIT ? OFFSET ?",
+                (episode_id, limit, offset),
+            ).fetchall()
+        return [report_result(row) for row in rows]
+
+    @router.get("/quality-reports/{report_id}")
+    def report_detail(project_id: str, episode_id: str, report_id: str):
+        with closing(connect(database_path)) as connection:
+            load(project_id, episode_id, connection)
+            row = connection.execute(
+                "SELECT * FROM quality_reports WHERE id=? AND episode_id=?", (report_id, episode_id)
+            ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Report not found")
+        return report_result(row)
 
     @router.get("/assets/{asset_id}/content")
     def content(project_id: str, episode_id: str, asset_id: str,

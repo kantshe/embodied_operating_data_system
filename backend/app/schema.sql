@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS episodes (
     started_at TEXT,
     ended_at TEXT,
     outcome TEXT NOT NULL DEFAULT 'pending',
+    failure_reason TEXT,
+    annotation_version INTEGER NOT NULL DEFAULT 0,
     source_type TEXT NOT NULL DEFAULT 'synthetic',
     created_at TEXT NOT NULL
 );
@@ -61,6 +63,7 @@ CREATE TABLE IF NOT EXISTS annotation_revisions (
     field_name TEXT NOT NULL,
     previous_value TEXT,
     current_value TEXT,
+    revision INTEGER NOT NULL DEFAULT 0,
     changed_at TEXT NOT NULL
 );
 
@@ -75,3 +78,5 @@ CREATE TABLE IF NOT EXISTS dataset_versions (
 CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_episodes_task_id ON episodes(task_id);
 CREATE INDEX IF NOT EXISTS idx_assets_episode_id ON assets(episode_id);
+CREATE INDEX IF NOT EXISTS idx_quality_reports_episode ON quality_reports(episode_id, checked_at);
+CREATE INDEX IF NOT EXISTS idx_annotations_episode ON annotation_revisions(episode_id, changed_at);
