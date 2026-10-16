@@ -1,10 +1,19 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Episodes } from "./Episodes";
+import { DatasetVersions } from "./DatasetVersions";
 
 type Project = { id: string; name: string; description: string | null; created_at: string };
 type Task = { id: string; project_id: string; name: string; objective: string | null; scene: string | null; created_at: string };
 type Status = "loading" | "ready" | "error" | "missing";
 const PAGE_SIZE = 20;
+type View = "tasks" | "episodes" | "imports" | "versions";
+function readView(): View {
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  if (params.has("version")) return "versions";
+  if (params.has("episode")) return "episodes";
+  const value = params.get("view");
+  return value === "versions" || value === "episodes" || value === "imports" ? value : "tasks";
+}
 
 export function ProjectDetail({ projectId }: { projectId: string }) {
   const url = `/api/projects/${encodeURIComponent(projectId)}`;
@@ -22,13 +31,17 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [scene, setScene] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const [view, setView] = useState<"tasks" | "episodes" | "imports">(
-    () => new URLSearchParams(window.location.hash.slice(1)).has("episode") ? "episodes" : "tasks"
-  );
+  const [view, setView] = useState<View>(readView);
+
+  function selectView(value: View) {
+    setView(value);
+    window.location.hash = new URLSearchParams({ project: projectId, view: value }).toString();
+  }
 
   useEffect(() => {
     const update = () => {
-      if (new URLSearchParams(window.location.hash.slice(1)).has("episode")) setView("episodes");
+      const params = new URLSearchParams(window.location.hash.slice(1));
+      if (params.has("version") || params.has("episode") || params.has("view")) setView(readView());
     };
     window.addEventListener("hashchange", update);
     return () => window.removeEventListener("hashchange", update);
@@ -126,22 +139,23 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         <dt>创建时间</dt><dd><time dateTime={project.created_at}>{formatDate(project.created_at)}</time></dd>
       </dl>
       <div className="view-tabs" role="tablist" aria-label="项目视图">
-        {(["tasks", "episodes", "imports"] as const).map((value) => <button
+        {(["tasks", "episodes", "imports", "versions"] as const).map((value) => <button
           key={value} role="tab" id={`tab-${value}`} aria-selected={view === value}
           tabIndex={view === value ? 0 : -1}
-          aria-controls="project-panel" onClick={() => setView(value)}
+          aria-controls="project-panel" onClick={() => selectView(value)}
           onKeyDown={(event) => {
-            const views = ["tasks", "episodes", "imports"] as const;
+            const views = ["tasks", "episodes", "imports", "versions"] as const;
             const index = views.indexOf(value);
-            const next = event.key === "ArrowRight" ? views[(index + 1) % 3] :
-              event.key === "ArrowLeft" ? views[(index + 2) % 3] :
-              event.key === "Home" ? views[0] : event.key === "End" ? views[2] : null;
-            if (next) { event.preventDefault(); setView(next); document.getElementById(`tab-${next}`)?.focus(); }
+            const next = event.key === "ArrowRight" ? views[(index + 1) % views.length] :
+              event.key === "ArrowLeft" ? views[(index + views.length - 1) % views.length] :
+              event.key === "Home" ? views[0] : event.key === "End" ? views[views.length - 1] : null;
+            if (next) { event.preventDefault(); selectView(next); document.getElementById(`tab-${next}`)?.focus(); }
           }}
-        >{{ tasks: "任务", episodes: "操作记录", imports: "导入" }[value]}</button>)}
+        >{{ tasks: "任务", episodes: "操作记录", imports: "导入", versions: "数据集版本" }[value]}</button>)}
       </div>
       <div id="project-panel" role="tabpanel" aria-labelledby={`tab-${view}`}>
-      <div hidden={view === "tasks"}><Episodes projectId={projectId} view={view === "imports" ? "imports" : "episodes"} active={view !== "tasks"} /></div>
+      <div hidden={view !== "episodes" && view !== "imports"}><Episodes projectId={projectId} view={view === "imports" ? "imports" : "episodes"} active={view === "episodes" || view === "imports"} /></div>
+      {view === "versions" && <DatasetVersions projectId={projectId} />}
       <section aria-label="项目任务" hidden={view !== "tasks"}>
         <div className="content-header">
           <h2>任务</h2>

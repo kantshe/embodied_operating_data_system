@@ -80,3 +80,4 @@ CREATE INDEX IF NOT EXISTS idx_episodes_task_id ON episodes(task_id);
 CREATE INDEX IF NOT EXISTS idx_assets_episode_id ON assets(episode_id);
 CREATE INDEX IF NOT EXISTS idx_quality_reports_episode ON quality_reports(episode_id, checked_at);
 CREATE INDEX IF NOT EXISTS idx_annotations_episode ON annotation_revisions(episode_id, changed_at);
+CREATE INDEX IF NOT EXISTS idx_versions_project ON dataset_versions(project_id, created_at);

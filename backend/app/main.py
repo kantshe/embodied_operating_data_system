@@ -13,6 +13,7 @@ from app.batch_import import import_batch
 from app.import_manifest import ImportManifest, ImportResult
 from app.episode_detail import episode_router
 from app.annotations import annotation_router
+from app.dataset_versions import version_router
 
 DEFAULT_DATABASE_PATH = Path(__file__).resolve().parents[1] / "data" / "system.db"
 
@@ -237,6 +238,7 @@ def create_app(
 
     app.include_router(episode_router(database_path, storage_root))
     app.include_router(annotation_router(database_path))
+    app.include_router(version_router(database_path, storage_root))
     return app
 
 

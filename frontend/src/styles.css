@@ -44,6 +44,14 @@ h1 { font-size: 24px; line-height: 1.4; margin: 0 0 24px; }
 .full-width { grid-column: 1 / -1; }
 .filter-fields { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 .view-tabs { display: flex; gap: 20px; border-bottom: 1px solid #dfe3e5; margin-bottom: 24px; }
+.view-tabs { flex-wrap: wrap; gap: 8px 16px; }
+.version-selection th:first-child { width: 48px; }
+.version-selection th:nth-child(2) { width: 40%; }
+.version-selection input { width: 18px; height: 18px; }
+.version-info { margin-top: 20px; }
+.snapshot-record { padding: 16px 0; border-bottom: 1px solid #dfe3e5; overflow-wrap: anywhere; }
+.snapshot-record summary { cursor: pointer; padding: 8px 0; }
+.snapshot-record .project-info { margin-top: 20px; }
 .view-tabs button { border: 0; border-radius: 0; border-bottom: 2px solid transparent; height: 44px; background: none; }
 .view-tabs button[aria-selected="true"] { border-bottom-color: #28654f; font-weight: 600; }
 .episode-table { min-width: 980px; }
